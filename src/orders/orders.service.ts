@@ -6,21 +6,19 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { UpdateOrderDto } from './dto/update-order.dto';
 import { OrderStatus, PrismaClient } from 'generated/prisma';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { OrderPaginationDto } from './dto/order-pagination.dto';
-import { ChangeOrderStatusDto } from './dto';
-import { NATS_SERVICE, PRODUCTS_SERVICE } from 'src/config';
+import { ChangeOrderStatusDto, OrderPaidDto } from './dto';
+import { NATS_SERVICE } from 'src/config';
 import { firstValueFrom } from 'rxjs';
+import { IOrderWithProducts } from './interfaces/order-with-products.interface';
 
 @Injectable()
 export class OrdersService extends PrismaClient implements OnModuleInit {
   private readonly logger = new Logger('OrdersService');
 
-  constructor(
-    @Inject(NATS_SERVICE) private readonly client: ClientProxy,
-  ) {
+  constructor(@Inject(NATS_SERVICE) private readonly client: ClientProxy) {
     super();
   }
 
@@ -29,7 +27,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
     this.logger.log('Database Connected');
   }
 
-  async create(createOrderDto: CreateOrderDto) {
+  async create(createOrderDto: CreateOrderDto): Promise<IOrderWithProducts> {
     try {
       const productIds = createOrderDto.items.map((item) => item.productId);
 
@@ -81,7 +79,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
         OrderItem: order.OrderItem.map((orderItem) => ({
           ...orderItem,
           name: products.find((product) => product.id === orderItem.productId)
-            .name,
+            .name as string,
         })),
       };
     } catch (error) {
@@ -164,5 +162,49 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       where: { id },
       data: { status },
     });
+  }
+
+  async createPaymentSession(order: IOrderWithProducts) {
+    const paymentSession = await firstValueFrom(
+      this.client.send('create.payment.session', {
+        orderId: order.id,
+        currency: 'usd',
+        items: order.OrderItem.map((item) => ({
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+        })),
+      }),
+    );
+
+    return paymentSession;
+  }
+
+  async handleOrderPaid(orderPaidDto: OrderPaidDto) {
+    this.logger.log(`Handling paid order: ${orderPaidDto.orderId}`);
+
+    await this.order.update({
+      where: { id: orderPaidDto.orderId },
+      data: {
+        status: OrderStatus.PAID,
+        paidAt: new Date(),
+        paid: true,
+        stripeChargeId: orderPaidDto.stripePaymentId,
+
+        OrderReceipt: {
+          upsert: {
+            where: { orderId: orderPaidDto.orderId },
+            create: {
+              receiptUrl: orderPaidDto.receiptUrl,
+            },
+            update: {
+              receiptUrl: orderPaidDto.receiptUrl,
+            },
+          },
+        },
+      },
+    });
+
+    this.logger.log(`Order ${orderPaidDto.orderId} marked as PAID`);
   }
 }

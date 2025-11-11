@@ -12,6 +12,7 @@ async function bootstrap() {
     {
       transport: Transport.NATS,
       options: {
+        name: 'ORDERS_SERVICE',
         servers: envs.natsServers,
       },
     },
@@ -23,7 +24,7 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
     }),
   );
-
+  
   await app.listen();
 
   logger.log(`Orders Microservice running on port ${envs.port}`);

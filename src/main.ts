@@ -24,6 +24,8 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
     }),
   );
+
+  console.log('Triggering workflow');
   
   await app.listen();
 
